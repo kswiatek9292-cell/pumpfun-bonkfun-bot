@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paper Trading Dashboard</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --card: #161b22;
+            --border: #30363d;
+            --text: #e6edf3;
+            --text-dim: #8b949e;
+            --green: #3fb950;
+            --red: #f85149;
+            --blue: #58a6ff;
+            --yellow: #d29922;
+            --cyan: #39c5cf;
+            --purple: #bc8cff;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            padding: 20px;
+            min-height: 100vh;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 24px;
+            font-size: 1.8rem;
+            color: var(--blue);
+            letter-spacing: 2px;
+        }
+        .header-meta {
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            margin-bottom: 24px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+        }
+        .stat-card .label {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+        }
+        .stat-card .value {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+        .stat-card .value.positive { color: var(--green); }
+        .stat-card .value.negative { color: var(--red); }
+        .stat-card .value.neutral { color: var(--blue); }
+        .panels {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        @media (max-width: 900px) {
+            .panels { grid-template-columns: 1fr; }
+        }
+        .panel {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .panel-full {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 24px;
+        }
+        .panel-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+        .panel-header.green { color: var(--green); }
+        .panel-header.red { color: var(--red); }
+        .panel-header.yellow { color: var(--yellow); }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th {
+            text-align: left;
+            padding: 8px 12px;
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border);
+        }
+        td {
+            padding: 8px 12px;
+            font-size: 0.85rem;
+            border-bottom: 1px solid var(--border);
+        }
+        tr:last-child td { border-bottom: none; }
+        .text-right { text-align: right; }
+        .text-dim { color: var(--text-dim); }
+        .text-cyan { color: var(--cyan); }
+        .text-green { color: var(--green); }
+        .text-red { color: var(--red); }
+        .text-yellow { color: var(--yellow); }
+        .text-purple { color: var(--purple); }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge-buy { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+        .badge-sell { background: rgba(248, 81, 73, 0.15); color: var(--red); }
+        .empty-msg {
+            padding: 24px;
+            text-align: center;
+            color: var(--text-dim);
+            font-style: italic;
+        }
+        .mint-addr {
+            font-family: monospace;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+        }
+    </style>
+</head>
+<body>
+    <h1>PAPER TRADING DASHBOARD</h1>
+    <div class="header-meta" id="last-update">Loading...</div>
+
+    <div class="stats-grid" id="stats-grid"></div>
+
+    <div class="panels">
+        <div class="panel">
+            <div class="panel-header green">Open Positions</div>
+            <div id="open-positions"></div>
+        </div>
+        <div class="panel">
+            <div class="panel-header yellow">Recent Trades</div>
+            <div id="recent-trades"></div>
+        </div>
+    </div>
+
+    <div class="panel-full">
+        <div class="panel-header red">Closed Positions</div>
+        <div id="closed-positions"></div>
+    </div>
+
+    <script>
+        function shortMint(mint) {
+            if (!mint || mint.length <= 12) return mint || '--';
+            return mint.slice(0, 6) + '..' + mint.slice(-4);
+        }
+        function shortTime(ts) {
+            if (!ts) return '--';
+            if (ts.includes('T')) return ts.split('T')[1].slice(0, 8);
+            return ts.slice(0, 8);
+        }
+        function pnlClass(val) {
+            return val >= 0 ? 'text-green' : 'text-red';
+        }
+        function pnlSign(val, decimals) {
+            return (val >= 0 ? '+' : '') + val.toFixed(decimals);
+        }
+
+        function renderStats(summary) {
+            const pnl = summary.total_pnl_sol || 0;
+            const pnlPct = summary.total_pnl_pct || 0;
+            const stats = [
+                { label: 'Initial Balance', value: (summary.initial_balance_sol || 0).toFixed(6) + ' SOL', cls: 'neutral' },
+                { label: 'Current Balance', value: (summary.current_balance_sol || 0).toFixed(6) + ' SOL', cls: pnl >= 0 ? 'positive' : 'negative' },
+                { label: 'Total PnL', value: pnlSign(pnl, 6) + ' SOL (' + pnlSign(pnlPct, 2) + '%)', cls: pnl >= 0 ? 'positive' : 'negative' },
+                { label: 'Trades (W/L)', value: (summary.total_trades || 0) + ' (' + (summary.winning_trades || 0) + 'W / ' + (summary.losing_trades || 0) + 'L)', cls: 'neutral' },
+                { label: 'Win Rate', value: (summary.win_rate_pct || 0).toFixed(1) + '%', cls: 'neutral' },
+                { label: 'Open Positions', value: String(summary.open_positions || 0), cls: 'neutral' },
+            ];
+            const grid = document.getElementById('stats-grid');
+            grid.innerHTML = stats.map(s =>
+                `<div class="stat-card"><div class="label">${s.label}</div><div class="value ${s.cls}">${s.value}</div></div>`
+            ).join('');
+        }
+
+        function renderOpenPositions(positions) {
+            const el = document.getElementById('open-positions');
+            if (!positions || positions.length === 0) {
+                el.innerHTML = '<div class="empty-msg">No open positions</div>';
+                return;
+            }
+            let html = '<table><thead><tr><th>Symbol</th><th>Mint</th><th>Platform</th><th class="text-right">Price</th><th class="text-right">Amount</th><th class="text-right">SOL</th><th>Time</th></tr></thead><tbody>';
+            positions.forEach(p => {
+                html += `<tr>
+                    <td class="text-cyan">${p.symbol || '?'}</td>
+                    <td class="mint-addr">${shortMint(p.mint)}</td>
+                    <td class="text-purple">${p.platform || '?'}</td>
+                    <td class="text-right">${(p.price_sol || 0).toFixed(8)}</td>
+                    <td class="text-right">${(p.token_amount || 0).toFixed(4)}</td>
+                    <td class="text-right text-yellow">${(p.sol_value || 0).toFixed(6)}</td>
+                    <td class="text-dim">${shortTime(p.timestamp)}</td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+            el.innerHTML = html;
+        }
+
+        function renderRecentTrades(trades) {
+            const el = document.getElementById('recent-trades');
+            if (!trades || trades.length === 0) {
+                el.innerHTML = '<div class="empty-msg">No trades yet</div>';
+                return;
+            }
+            const recent = trades.slice(-20).reverse();
+            let html = '<table><thead><tr><th>Time</th><th>Action</th><th>Symbol</th><th class="text-right">Price</th><th class="text-right">Tokens</th><th class="text-right">SOL</th></tr></thead><tbody>';
+            recent.forEach(t => {
+                const action = t.action || '?';
+                const badgeCls = action === 'buy' ? 'badge-buy' : 'badge-sell';
+                html += `<tr>
+                    <td class="text-dim">${shortTime(t.timestamp)}</td>
+                    <td><span class="badge ${badgeCls}">${action.toUpperCase()}</span></td>
+                    <td class="text-cyan">${t.symbol || '?'}</td>
+                    <td class="text-right">${(t.price_sol || 0).toFixed(8)}</td>
+                    <td class="text-right">${(t.token_amount || 0).toFixed(4)}</td>
+                    <td class="text-right text-yellow">${(t.sol_value || 0).toFixed(6)}</td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+            el.innerHTML = html;
+        }
+
+        function renderClosedPositions(positions) {
+            const el = document.getElementById('closed-positions');
+            if (!positions || positions.length === 0) {
+                el.innerHTML = '<div class="empty-msg">No closed positions yet</div>';
+                return;
+            }
+            const recent = positions.slice(-30).reverse();
+            let html = '<table><thead><tr><th>Symbol</th><th>Mint</th><th class="text-right">Buy Price</th><th class="text-right">Sell Price</th><th class="text-right">PnL (SOL)</th><th class="text-right">PnL %</th><th>Sold At</th></tr></thead><tbody>';
+            recent.forEach(p => {
+                const pnl = p.pnl_sol || 0;
+                const pnlPct = p.pnl_pct || 0;
+                html += `<tr>
+                    <td class="text-cyan">${p.symbol || '?'}</td>
+                    <td class="mint-addr">${shortMint(p.mint)}</td>
+                    <td class="text-right">${(p.buy_price || 0).toFixed(8)}</td>
+                    <td class="text-right">${(p.sell_price || 0).toFixed(8)}</td>
+                    <td class="text-right ${pnlClass(pnl)}">${pnlSign(pnl, 6)}</td>
+                    <td class="text-right ${pnlClass(pnlPct)}">${pnlSign(pnlPct, 2)}%</td>
+                    <td class="text-dim">${shortTime(p.sell_timestamp)}</td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+            el.innerHTML = html;
+        }
+
+        async function refreshData() {
+            try {
+                const resp = await fetch('/api/data');
+                const data = await resp.json();
+                renderStats(data.summary || {});
+                renderOpenPositions(data.open_positions || []);
+                renderRecentTrades(data.trades || []);
+                renderClosedPositions(data.closed_positions || []);
+                document.getElementById('last-update').textContent =
+                    'Last update: ' + new Date().toLocaleTimeString() + ' | Auto-refresh: 3s';
+            } catch (e) {
+                document.getElementById('last-update').textContent =
+                    'Error loading data: ' + e.message;
+            }
+        }
+
+        refreshData();
+        setInterval(refreshData, 3000);
+    </script>
+</body>
+</html>
