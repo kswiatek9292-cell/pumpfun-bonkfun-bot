@@ -154,6 +154,9 @@ async def start_bot(config_path: str):
             compute_units=cfg.get("compute_units", {}),
             # Node provider configuration
             max_rps=cfg.get("node", {}).get("max_rps", 25),
+            # Paper trading mode
+            paper_mode=cfg.get("paper_mode", False),
+            paper_initial_balance=cfg.get("paper_initial_balance", 1.0),
         )
 
         await trader.start()

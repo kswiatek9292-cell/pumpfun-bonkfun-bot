@@ -24,6 +24,7 @@ from interfaces.core import Platform, TokenInfo
 from monitoring.listener_factory import ListenerFactory
 from platforms import get_platform_implementations
 from trading.base import TradeResult
+from trading.paper_trader import PaperBuyer, PaperSeller, PaperWallet
 from trading.platform_aware import PlatformAwareBuyer, PlatformAwareSeller
 from trading.position import Position
 from utils.logger import get_logger
@@ -100,6 +101,9 @@ class UniversalTrader:
         compute_units: dict | None = None,
         # Node provider configuration
         max_rps: float = 25.0,
+        # Paper trading mode
+        paper_mode: bool = False,
+        paper_initial_balance: float = 1.0,
     ):
         """Initialize the universal trader."""
         # Core components
@@ -140,27 +144,56 @@ class UniversalTrader:
         # Store compute unit configuration
         self.compute_units = compute_units or {}
 
-        # Create platform-aware traders
-        self.buyer = PlatformAwareBuyer(
-            self.solana_client,
-            self.wallet,
-            self.priority_fee_manager,
-            buy_amount,
-            buy_slippage,
-            max_retries,
-            extreme_fast_token_amount,
-            extreme_fast_mode,
-            compute_units=self.compute_units,
-        )
+        # Paper trading mode
+        self.paper_mode = paper_mode
+        self.paper_wallet: PaperWallet | None = None
 
-        self.seller = PlatformAwareSeller(
-            self.solana_client,
-            self.wallet,
-            self.priority_fee_manager,
-            sell_slippage,
-            max_retries,
-            compute_units=self.compute_units,
-        )
+        if self.paper_mode:
+            self.paper_wallet = PaperWallet(
+                initial_balance_sol=paper_initial_balance,
+                balance_sol=paper_initial_balance,
+            )
+            logger.info(
+                "[PAPER MODE] Enabled with %.6f SOL initial balance",
+                paper_initial_balance,
+            )
+            self.buyer = PaperBuyer(
+                self.solana_client,
+                self.wallet,
+                buy_amount,
+                buy_slippage,
+                self.paper_wallet,
+                extreme_fast_mode=extreme_fast_mode,
+                extreme_fast_token_amount=extreme_fast_token_amount,
+            )
+            self.seller = PaperSeller(
+                self.solana_client,
+                self.wallet,
+                sell_slippage,
+                self.paper_wallet,
+            )
+        else:
+            # Create platform-aware traders
+            self.buyer = PlatformAwareBuyer(
+                self.solana_client,
+                self.wallet,
+                self.priority_fee_manager,
+                buy_amount,
+                buy_slippage,
+                max_retries,
+                extreme_fast_token_amount,
+                extreme_fast_mode,
+                compute_units=self.compute_units,
+            )
+
+            self.seller = PlatformAwareSeller(
+                self.solana_client,
+                self.wallet,
+                self.priority_fee_manager,
+                sell_slippage,
+                max_retries,
+                compute_units=self.compute_units,
+            )
 
         # Initialize the appropriate listener with platform filtering
         self.token_listener = ListenerFactory.create_listener(
@@ -218,7 +251,8 @@ class UniversalTrader:
 
     async def start(self) -> None:
         """Start the trading bot and listen for new tokens."""
-        logger.info(f"Starting Universal Trader for {self.platform.value}")
+        mode_label = "[PAPER MODE] " if self.paper_mode else ""
+        logger.info(f"{mode_label}Starting Universal Trader for {self.platform.value}")
         logger.info(
             f"Match filter: {self.match_string if self.match_string else 'None'}"
         )
@@ -340,6 +374,15 @@ class UniversalTrader:
 
     async def _cleanup_resources(self) -> None:
         """Perform cleanup operations before shutting down."""
+        if self.paper_mode and self.paper_wallet:
+            from trading.paper_trader import _save_paper_summary
+
+            summary = self.paper_wallet.get_summary()
+            logger.info("[PAPER] Final summary: %s", json.dumps(summary, indent=2))
+            _save_paper_summary(self.paper_wallet)
+            await self.solana_client.close()
+            return
+
         if self.traded_mints:
             try:
                 logger.info(f"Cleaning up {len(self.traded_mints)} traded token(s)...")
@@ -492,6 +535,8 @@ class UniversalTrader:
     ) -> None:
         """Handle failed token purchase."""
         logger.error(f"Failed to buy {token_info.symbol}: {buy_result.error_message}")
+        if self.paper_mode:
+            return
         # Close ATA if enabled
         await handle_cleanup_after_failure(
             self.solana_client,
@@ -555,17 +600,18 @@ class UniversalTrader:
                 sell_result.amount,
                 sell_result.tx_signature,
             )
-            # Close ATA if enabled
-            await handle_cleanup_after_sell(
-                self.solana_client,
-                self.wallet,
-                token_info.mint,
-                token_info.token_program_id,
-                self.priority_fee_manager,
-                self.cleanup_mode,
-                self.cleanup_with_priority_fee,
-                self.cleanup_force_close_with_burn,
-            )
+            # Close ATA if enabled (skip in paper mode)
+            if not self.paper_mode:
+                await handle_cleanup_after_sell(
+                    self.solana_client,
+                    self.wallet,
+                    token_info.mint,
+                    token_info.token_program_id,
+                    self.priority_fee_manager,
+                    self.cleanup_mode,
+                    self.cleanup_with_priority_fee,
+                    self.cleanup_force_close_with_burn,
+                )
         else:
             logger.error(
                 f"Failed to sell {token_info.symbol}: {sell_result.error_message}"
@@ -629,17 +675,18 @@ class UniversalTrader:
                             f"Final PnL: {final_pnl['price_change_pct']:.2f}% ({final_pnl['unrealized_pnl_sol']:.6f} SOL)"
                         )
 
-                        # Close ATA if enabled
-                        await handle_cleanup_after_sell(
-                            self.solana_client,
-                            self.wallet,
-                            token_info.mint,
-                            token_info.token_program_id,
-                            self.priority_fee_manager,
-                            self.cleanup_mode,
-                            self.cleanup_with_priority_fee,
-                            self.cleanup_force_close_with_burn,
-                        )
+                        # Close ATA if enabled (skip in paper mode)
+                        if not self.paper_mode:
+                            await handle_cleanup_after_sell(
+                                self.solana_client,
+                                self.wallet,
+                                token_info.mint,
+                                token_info.token_program_id,
+                                self.priority_fee_manager,
+                                self.cleanup_mode,
+                                self.cleanup_with_priority_fee,
+                                self.cleanup_force_close_with_burn,
+                            )
                     else:
                         logger.error(
                             f"Failed to exit position: {sell_result.error_message}"

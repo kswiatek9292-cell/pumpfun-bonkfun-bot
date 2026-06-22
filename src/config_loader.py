@@ -300,8 +300,13 @@ def print_config_summary(config: dict) -> None:
     """Print a summary of the loaded configuration with platform info."""
     platform_str = config.get("platform", "pump_fun")
 
+    paper_mode = config.get("paper_mode", False)
     print(f"Bot name: {config.get('name', 'unnamed')}")
     print(f"Platform: {platform_str}")
+    if paper_mode:
+        print(
+            f"Mode: PAPER TRADING (initial balance: {config.get('paper_initial_balance', 1.0)} SOL)"
+        )
     print(
         f"Listener type: {config.get('filters', {}).get('listener_type', 'not configured')}"
     )
